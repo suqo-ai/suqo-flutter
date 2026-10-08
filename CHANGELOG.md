@@ -1,0 +1,38 @@
+# Changelog
+
+All notable changes to `suqo_checkout` are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this package follows
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.0]
+
+### Added
+
+- `SuqoCheckout.open(context, sessionId: …)` — pushes the full-screen checkout and
+  completes with exactly one `SuqoOutcome` (`SuqoSuccess`, `SuqoFailure`, `SuqoClosed`).
+  Flutter's `Navigator` already returns a result from a pushed screen, so there is no
+  provider to mount and no callback trio to wire: the port of `@suqo/react-native` follows
+  the platform rather than the original's shape here.
+- `SuqoProvider` — optional, and configuration only. App-wide defaults for `mode`,
+  `baseUrl`, `checkoutPath`, `title`, `loadingLabel`, `debug` and `onEvent`, each
+  overridable per call.
+- `SuqoMode.sandbox` (the default) / `.live`, resolving to `test.suqo.ai` / `app.suqo.ai`,
+  with `baseUrl` overriding both. An app that names neither cannot take a live payment by
+  accident.
+- Bank and wallet deeplinks (`fonepayApp://`, Android `intent://`) are lifted out of the
+  WebView to the OS; `javascript:`, `data:`, `file:` and `blob:` navigations are refused
+  outright. Gateway return pages are allowed to load, because that is where the payment is
+  verified.
+- Two load deadlines — 12s to the page's first signal, 25s to the block mounting — with a
+  retry, so a page that never boots reports a loading failure rather than hanging.
+- `onEvent`, a redacted debug stream, and `debug` logging that scrubs session ids, URLs and
+  gateway params by shape as well as by key name.
+
+### Notes
+
+- No changes are required on the SUQO web app. The page already probes for
+  `window.SuqoWebView.postMessage(string)` as a vendor-neutral native-host bridge, and this
+  package's JavaScript channel is named to match.
+- Requires Flutter 3.3.0 / Dart 2.18. The floor is set by
+  `webview_flutter_android` 3.7.0, the first release exposing
+  `setAcceptThirdPartyCookies`.

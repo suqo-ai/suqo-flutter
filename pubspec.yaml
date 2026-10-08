@@ -1,0 +1,28 @@
+name: suqo_checkout
+description: Collect a SUQO payment on a full-screen checkout screen. No gateway integration, no payment UI to build.
+version: 0.1.0
+repository: https://github.com/suqo-ai/suqo-flutter
+issue_tracker: https://github.com/suqo-ai/suqo-flutter/issues
+
+# Flutter 3.3.0, not 3.0.0: `setAcceptThirdPartyCookies` arrives in
+# webview_flutter_android 3.7.0, which is the first to require 3.3.0. The gateway journey
+# crosses sites, so that setting is not optional, and 3.3.0 is three months newer than 3.0.0
+# — a cheaper price than dropping to a webview plugin that is no longer actively maintained.
+environment:
+  sdk: ">=2.18.0 <4.0.0"
+  flutter: ">=3.3.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  meta: ^1.8.0
+  # 4.1.0 is the first release whose Android implementation can accept third-party cookies.
+  webview_flutter: ^4.1.0
+  webview_flutter_android: ^3.7.0
+  # 6.1.11 is the first requiring Flutter 3.3.0, which this package requires anyway.
+  url_launcher: ^6.1.11
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
