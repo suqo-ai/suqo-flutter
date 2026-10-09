@@ -47,14 +47,19 @@ String buildCheckoutUrl(
     throw SuqoConfigError(
         'baseUrl must be an http(s) URL — received "$baseUrl"');
   }
-  if (sessionId.trim().isEmpty) {
+  // Validated and used as the same value. Guarding on `sessionId.trim()` and then encoding
+  // the raw string let ' cks_9f2c41a8 ' through as `/c/%20cks_9f2c41a8%20` — a 404 the
+  // buyer meets as the generic 12-second timeout panel, for a session id that is correct
+  // apart from whitespace a form or a backend response left on it.
+  final id = sessionId.trim();
+  if (id.isEmpty) {
     throw const SuqoConfigError('sessionId is required');
   }
 
   final origin = trimmed.replaceAll(RegExp(r'/+$'), '');
   final path = checkoutPath.contains(':id')
-      ? checkoutPath.replaceFirst(':id', Uri.encodeComponent(sessionId))
-      : '${checkoutPath.replaceAll(RegExp(r'/+$'), '')}/${Uri.encodeComponent(sessionId)}';
+      ? checkoutPath.replaceFirst(':id', Uri.encodeComponent(id))
+      : '${checkoutPath.replaceAll(RegExp(r'/+$'), '')}/${Uri.encodeComponent(id)}';
 
   return origin + (path.startsWith('/') ? path : '/$path');
 }

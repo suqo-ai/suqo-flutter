@@ -58,8 +58,10 @@ class SuqoCheckout {
       checkoutPath ?? defaults?.checkoutPath ?? kDefaultCheckoutPath,
     );
 
+    // The same trimmed value `buildCheckoutUrl` resolved above, so the id the host sees on
+    // every event and on the outcome is the id that was actually paid.
     final session = CheckoutSession(
-      sessionId: sessionId,
+      sessionId: sessionId.trim(),
       onEvent: resolvedEvents,
     );
 

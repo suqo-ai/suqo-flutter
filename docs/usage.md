@@ -278,9 +278,21 @@ probe returns false in most cases from Android 11 for exactly the schemes that a
 
 ### `intent://` is Android-only
 
-iOS cannot resolve an `intent://` URI at all. A gateway that hands off that way works on
-Android and reports `handoff_failed` on iOS; one that uses a custom scheme (`fonepayApp://`,
-`esewa://`) works on both.
+An `intent://` URI is rewritten before it is launched, because `url_launcher` cannot launch
+one as written — its Android side builds an `ACTION_VIEW` intent from `Uri.parse`, never
+`Intent.parseUri`, so the scheme it sees is the literal `intent`, nothing declares a filter
+for it, and the launch fails. The package reads the real target out of the fragment instead:
+
+    intent://payment/?q=1#Intent;scheme=fonepayApp;package=…;S.browser_fallback_url=…;end
+
+`scheme=` plus the body rebuilds the deeplink the gateway meant (`fonepayApp://payment/?q=1`)
+and that is tried first; `S.browser_fallback_url` — Android's own documented fallback, in
+practice a Play Store page — is tried second. `handoff_failed` is reported only when both
+fail.
+
+On iOS the rebuilt deeplink is launched the same way, and the fallback URL opens in the
+browser when the bank app is not installed. An `intent://` that carries neither a `scheme=`
+nor a fallback has no target on any platform and reports `handoff_failed` immediately.
 
 iOS needs no `LSApplicationQueriesSchemes` entry for this, which is worth saying because the
 advice is everywhere: that key gates `canOpenURL`, and this package does not call it. Opening

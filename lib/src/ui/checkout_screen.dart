@@ -91,7 +91,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final queued = _queued;
       _queued = null;
-      if (queued == null || !mounted) return;
+      if (queued == null) return;
+      // Flushed even when the screen is already gone. A host that opened and immediately
+      // dismissed still asked for these; dropping them would make `open` the one event
+      // that silently does not arrive, and a host counting opens against settles would
+      // never balance.
       for (final event in queued) {
         widget.onEvent?.call(event);
       }
@@ -144,6 +148,17 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   void _fail(LoadErrorReason reason) {
     if (!mounted) return;
+    // Only while still loading. Past `ready` the buyer is on a live page — very often the
+    // gateway's own — and the deadlines cannot fire there because `_clearTimers` runs on
+    // `ready` and `gateway`, but a load error can: any failing request on the bank's page
+    // reaches `onLoadError`. Painting the panel then covers a working payment form, and
+    // its "Try again" remounts the WebView on the *original* checkout URL, discarding the
+    // gateway session the buyer is in the middle of. That is the one thing the class
+    // comment above says must never happen.
+    if (_phase != _Phase.loading) {
+      log('load.error_ignored', {'phase': _phase.name, 'reason': reason.name});
+      return;
+    }
     setState(() {
       _errorReason = reason;
       _phase = _Phase.error;
@@ -212,9 +227,23 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   void _settleAndClose(Settlement settlement) {
     widget.session.settle(settlement);
     if (_closing) return;
+    if (!mounted) return;
+
+    // This screen's own route, not whatever happens to be on top. `maybePop` pops the
+    // topmost one, so a host dialog or a notification deeplink sitting above the checkout
+    // would be dismissed instead — leaving the checkout on screen with `_closing` already
+    // latched, which makes the back button and the error panel's "Close" both dead. The
+    // buyer could then only escape with a system gesture.
+    final route = ModalRoute.of(context);
+    if (route == null) return;
+
     _closing = true;
     _clearTimers();
-    if (mounted) Navigator.of(context).maybePop();
+    if (route.isCurrent) {
+      Navigator.of(context).pop();
+    } else {
+      Navigator.of(context).removeRoute(route);
+    }
   }
 
   /// Back button. An explicit dismissal.

@@ -125,6 +125,38 @@ void main() {
     );
   });
 
+  testWidgets('a load error after ready does not paint the panel',
+      (tester) async {
+    // Android reports every failing subresource through onWebResourceError — a 404 favicon
+    // on the checkout page, or anything at all on the gateway's. Past `ready` the buyer is
+    // on a live page, and the panel's "Try again" reloads the ORIGINAL checkout URL, which
+    // would throw away a gateway session mid-payment.
+    final harness = await pumpScreen(tester);
+
+    harness.send(const ReadyMessage());
+    await tester.pump();
+
+    harness.handlers.onLoadError();
+    await tester.pump();
+
+    expect(find.byType(ErrorState), findsNothing);
+  });
+
+  testWidgets('a load error after the gateway does not paint the panel',
+      (tester) async {
+    final harness = await pumpScreen(tester);
+
+    harness.send(const ReadyMessage());
+    harness.send(const GatewayMessage());
+    await tester.pump();
+
+    harness.handlers.onLoadError();
+    await tester.pump();
+
+    expect(find.byType(ErrorState), findsNothing);
+    expect(harness.session.settled, isFalse);
+  });
+
   testWidgets('suqo:alive disarms that deadline and arms the ready one',
       (tester) async {
     final harness = await pumpScreen(tester);

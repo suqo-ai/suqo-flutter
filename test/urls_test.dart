@@ -40,6 +40,16 @@ void main() {
       );
     });
 
+    test('trims the session id it was validated on', () {
+      // The guard used to test `sessionId.trim()` and then encode the raw value, so
+      // whitespace a form or a backend response left on the id produced
+      // `/c/%20cks_abc%20` — a 404 the buyer only meets as the 12-second timeout panel.
+      expect(
+        buildCheckoutUrl('https://test.suqo.ai', '  cks_abc  '),
+        'https://test.suqo.ai/c/cks_abc',
+      );
+    });
+
     test('refuses a base url that is not http(s)', () {
       // The sheet would otherwise load whatever this resolved to, which for a
       // `javascript:` value is script execution inside the payment surface.
