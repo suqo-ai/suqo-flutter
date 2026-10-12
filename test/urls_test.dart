@@ -63,6 +63,24 @@ void main() {
       );
     });
 
+    test('refuses a base url that passes the shape check but cannot parse', () {
+      // `^https?://` is a shape check, not a parse. These all satisfy it and all make
+      // Uri.parse throw FormatException — which happened inside the WebView's initState,
+      // where the screen never renders and the awaited open() never completes. Failing
+      // here keeps the promise that a bad configuration throws before anything is shown.
+      for (final bad in [
+        'https://[bad',
+        'https://a b.com:xy',
+        'https://@@',
+      ]) {
+        expect(
+          () => buildCheckoutUrl(bad, 'cks_abc'),
+          throwsA(isA<SuqoConfigError>()),
+          reason: bad,
+        );
+      }
+    });
+
     test('refuses an empty session id', () {
       expect(
         () => buildCheckoutUrl('https://test.suqo.ai', '   '),

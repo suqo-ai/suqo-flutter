@@ -278,8 +278,8 @@ probe returns false in most cases from Android 11 for exactly the schemes that a
 
 ### `intent://` is Android-only
 
-An `intent://` URI is rewritten before it is launched, because `url_launcher` cannot launch
-one as written — its Android side builds an `ACTION_VIEW` intent from `Uri.parse`, never
+An intent URI is rewritten before it is launched, because `url_launcher` cannot launch one
+as written — its Android side builds an `ACTION_VIEW` intent from `Uri.parse`, never
 `Intent.parseUri`, so the scheme it sees is the literal `intent`, nothing declares a filter
 for it, and the launch fails. The package reads the real target out of the fragment instead:
 
@@ -288,7 +288,13 @@ for it, and the launch fails. The package reads the real target out of the fragm
 `scheme=` plus the body rebuilds the deeplink the gateway meant (`fonepayApp://payment/?q=1`)
 and that is tried first; `S.browser_fallback_url` — Android's own documented fallback, in
 practice a Play Store page — is tried second. `handoff_failed` is reported only when both
-fail.
+fail. Both spellings are handled: `intent://pay#…` and the authority-less `intent:pay#…`.
+
+Two things are refused rather than launched. The fallback must be `http(s)` — it is the one
+field that names a whole URL rather than a scheme, so it is what a compromised gateway page
+would reach for — and every rebuilt candidate goes back through the same scheme classifier
+the WebView's own navigation does, so `javascript:`, `data:`, `file:` and `blob:` cannot
+reach the OS through this path either.
 
 On iOS the rebuilt deeplink is launched the same way, and the fallback URL opens in the
 browser when the bank app is not installed. An `intent://` that carries neither a `scheme=`

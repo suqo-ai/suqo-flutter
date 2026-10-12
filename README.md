@@ -196,6 +196,15 @@ The example runs against the React Native example's mock server unchanged — it
 Node script speaking the same protocol. Run `npm run mock` in `suqo-react-native/example`
 and point the example's base URL at the address it prints.
 
+The example's default base URL, `http://10.0.2.2:8787`, is the Android emulator's route to
+the host machine, and the example's Android manifest sets `usesCleartextTraffic="true"` so
+plain HTTP reaches it. **Neither applies on iOS**: use `http://localhost:8787` on the
+simulator, and add an App Transport Security exception
+(`NSAppTransportSecurity` → `NSAllowsLocalNetworking`) to `example/ios/Runner/Info.plist`,
+or the load is blocked and the sheet shows the generic "Couldn't reach the payment page"
+panel 12 seconds later with no hint why. Only the example needs this; a real integration
+talks to `app.suqo.ai` over HTTPS and needs no exception.
+
 ## License
 
 Apache-2.0

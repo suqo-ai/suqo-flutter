@@ -69,6 +69,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   int _reloadKey = 0;
   bool _closing = false;
 
+  /// Whether the failure happened past `ready`, so retrying must reload the current page
+  /// rather than remount on the original checkout URL. See [_fail].
+  bool _recoverable = false;
+
+  /// Reloads whatever the WebView is showing. Supplied by the WebView once it exists.
+  Future<void> Function()? _reload;
+
   Timer? _aliveTimer;
   Timer? _readyTimer;
 
@@ -148,19 +155,20 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   void _fail(LoadErrorReason reason) {
     if (!mounted) return;
-    // Only while still loading. Past `ready` the buyer is on a live page — very often the
-    // gateway's own — and the deadlines cannot fire there because `_clearTimers` runs on
-    // `ready` and `gateway`, but a load error can: any failing request on the bank's page
-    // reaches `onLoadError`. Painting the panel then covers a working payment form, and
-    // its "Try again" remounts the WebView on the *original* checkout URL, discarding the
-    // gateway session the buyer is in the middle of. That is the one thing the class
-    // comment above says must never happen.
-    if (_phase != _Phase.loading) {
-      log('load.error_ignored', {'phase': _phase.name, 'reason': reason.name});
-      return;
-    }
+    // What "try again" has to mean depends on where the buyer is.
+    //
+    // While loading, the page to retry is the checkout URL, and remounting the WebView is
+    // how that happens. Past `ready` the buyer has moved on — very often to the gateway's
+    // own page — and remounting there would reload the original checkout URL and discard
+    // the payment session they are in the middle of, which the class comment above says
+    // must never happen. So a post-`ready` failure retries by reloading wherever they
+    // actually are.
+    //
+    // Only main-frame failures reach this at all; the WebView filters subresource noise,
+    // which is what used to paint this panel over a working checkout.
     setState(() {
       _errorReason = reason;
+      _recoverable = _phase != _Phase.loading;
       _phase = _Phase.error;
     });
   }
@@ -249,6 +257,40 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   /// Back button. An explicit dismissal.
   void _requestClose() => _settleAndClose(const Settlement.closed());
 
+  /// "Try again" on the failure panel.
+  void _retry() {
+    // Every timer from the previous attempt, cancelled before the next one is armed. This
+    // used to arm the alive deadline without clearing, so a ready timer left running from
+    // the first attempt would fire mid-way through the second and paint "taking too long"
+    // over a page that had only just started loading — the exact orphaned-timer bug this
+    // package was written to avoid inheriting.
+    _clearTimers();
+
+    final reload = _reload;
+    if (_recoverable && reload != null) {
+      // Past `ready`: reload where the buyer actually is. The WebView is not remounted,
+      // so a gateway session survives.
+      setState(() {
+        _phase = _Phase.loading;
+        _recoverable = false;
+      });
+      reload().catchError(
+        (Object error) =>
+            log('webview.reload_failed', {'error': error.toString()}),
+      );
+      // No deadline re-armed: `suqo:alive` and `suqo:ready` belong to SUQO's own page, and
+      // the buyer is on the gateway's. Arming one here would paint the panel again over a
+      // gateway that is loading perfectly well.
+      return;
+    }
+
+    setState(() {
+      _phase = _Phase.loading;
+      _reloadKey += 1;
+    });
+    _armAliveDeadline();
+  }
+
   Widget _buildWebView() {
     final handlers = WebViewHandlers(
       onMessage: _handleMessage,
@@ -257,8 +299,16 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         openExternal(url).then((opened) {
           if (opened) return;
           _emit(SuqoEvent.handoffFailed(widget.session.sessionId, scheme));
+        }).catchError((Object error) {
+          // A throw here is still a failed hand-off, not a crash. Without this it became
+          // an unhandled zone error — a crash report from inside the payment sheet in any
+          // host running under `runZonedGuarded` — and the host never heard that the bank
+          // app did not open.
+          log('handoff.threw', {'error': error.toString()});
+          _emit(SuqoEvent.handoffFailed(widget.session.sessionId, scheme));
         });
       },
+      onReloader: (reload) => _reload = reload,
       onLoadEnd: () => log('webview.loaded'),
       onLoadError: () {
         _emit(SuqoEvent.loadError(widget.session.sessionId));
@@ -328,13 +378,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                       color: kSuqoSurface,
                       child: ErrorState(
                         reason: _errorReason,
-                        onRetry: () {
-                          setState(() {
-                            _phase = _Phase.loading;
-                            _reloadKey += 1;
-                          });
-                          _armAliveDeadline();
-                        },
+                        onRetry: _retry,
                         onClose: _requestClose,
                       ),
                     ),

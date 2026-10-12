@@ -3,6 +3,7 @@
 import 'package:url_launcher/url_launcher.dart';
 
 import 'log.dart';
+import 'urls.dart';
 
 /// Opens [url] outside the WebView. Returns true when the OS accepted it.
 ///
@@ -20,11 +21,9 @@ import 'log.dart';
 /// 11+ — one `<intent>` block per scheme. That is documented in the README; it cannot be
 /// shipped from inside this package.
 Future<bool> openExternal(String url) async {
-  // An `intent://` URI cannot be launched as written, so it is rewritten first. See
+  // An `intent:` URI cannot be launched as written, so it is rewritten first. See
   // [intentTargets].
-  final candidates = url.toLowerCase().startsWith('intent://')
-      ? intentTargets(url)
-      : <String>[url];
+  final candidates = isIntentUrl(url) ? intentTargets(url) : <String>[url];
 
   if (candidates.isEmpty) {
     log('handoff.failed', {'error': 'intent url named no target'});
@@ -32,6 +31,18 @@ Future<bool> openExternal(String url) async {
   }
 
   for (final candidate in candidates) {
+    // Back through the same classifier the WebView's navigation goes through. A rebuilt
+    // candidate is attacker-influenced input: after a handoff the WebView is on the
+    // gateway's and the bank's pages, not SUQO's, and one of those naming
+    // `scheme=file` — or a `javascript:` fallback — would otherwise hand `launchUrl`
+    // exactly the schemes `kBlockedSchemes` exists to refuse. Chrome restricts
+    // `browser_fallback_url` to http(s) for this same reason.
+    final navigation = classifyNavigation(candidate);
+    if (navigation.kind == NavigationKind.block) {
+      log('handoff.blocked', {'scheme': navigation.scheme});
+      continue;
+    }
+
     final uri = Uri.tryParse(candidate);
     if (uri == null) {
       log('handoff.failed', {'error': 'unparseable url'});
@@ -73,14 +84,22 @@ Future<bool> openExternal(String url) async {
 /// page for the app that is not installed. Both are returned, deeplink first, so a buyer
 /// without the bank app still lands somewhere useful instead of nowhere.
 ///
-/// iOS cannot resolve `intent://` under any circumstances, but it can resolve what this
+/// iOS cannot resolve `intent:` under any circumstances, but it can resolve what this
 /// rebuilds: the deeplink launches there too when the bank app is installed and claims that
 /// scheme, and the fallback URL opens in the browser when it is not.
 List<String> intentTargets(String url) {
+  if (!isIntentUrl(url)) return const [];
+
   final hash = url.indexOf('#');
   if (hash < 0) return const [];
 
-  final body = url.substring('intent://'.length, hash);
+  // Everything between the scheme and the fragment. The authority-less form `intent:pay`
+  // is as valid as `intent://pay` and gateways emit both, so the body is taken from after
+  // `intent:` and any `//` stripped, rather than sliced at a fixed `intent://` length —
+  // which on the short form would have eaten the first two characters of the path.
+  var body = url.substring('intent:'.length, hash);
+  if (body.startsWith('//')) body = body.substring(2);
+
   final targets = <String>[];
 
   String? scheme;
@@ -89,12 +108,33 @@ List<String> intentTargets(String url) {
     if (part.startsWith('scheme=')) {
       scheme = part.substring('scheme='.length);
     } else if (part.startsWith('S.browser_fallback_url=')) {
-      fallback =
-          Uri.decodeComponent(part.substring('S.browser_fallback_url='.length));
+      final raw = part.substring('S.browser_fallback_url='.length);
+      try {
+        fallback = Uri.decodeComponent(raw);
+      } on FormatException {
+        // A truncated or invalid escape — `%`, `%ZZ`, a half-written UTF-8 sequence.
+        // `decodeComponent` throws on all three, and this runs outside `openExternal`'s
+        // own try, so letting it propagate turned a bad fallback URL into an unhandled
+        // async error with no `handoff_failed` for the host. The deeplink is usually
+        // still good, so drop this one target rather than the whole handoff.
+        log('handoff.bad_fallback', {'error': 'undecodable fallback url'});
+      } on ArgumentError {
+        log('handoff.bad_fallback', {'error': 'undecodable fallback url'});
+      }
     }
   }
 
   if (scheme != null && scheme.isNotEmpty) targets.add('$scheme://$body');
-  if (fallback != null && fallback.isNotEmpty) targets.add(fallback);
+  // http(s) only. The fallback is the one field here that names a whole URL rather than a
+  // scheme, so it is the one an attacker-controlled page would reach for.
+  if (fallback != null && _isHttpUrl(fallback)) targets.add(fallback);
   return targets;
 }
+
+/// Whether [url] is an Android intent URI, in either the authority-less or `//` form.
+bool isIntentUrl(String url) =>
+    url.trimLeft().toLowerCase().startsWith('intent:');
+
+final RegExp _httpRe = RegExp(r'^https?://', caseSensitive: false);
+
+bool _isHttpUrl(String url) => _httpRe.hasMatch(url.trim());

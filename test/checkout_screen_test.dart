@@ -20,6 +20,10 @@ class Harness {
   final List<SuqoEvent> events;
   late WebViewHandlers handlers;
 
+  /// How many times the screen asked the WebView to reload the current page, rather than
+  /// remounting it on the original checkout URL.
+  int reloads = 0;
+
   /// Stands in for a message arriving on the JavaScript channel.
   void send(InboundMessage message) => handlers.onMessage(message);
 }
@@ -43,6 +47,8 @@ Future<Harness> pumpScreen(
         onEvent: events.add,
         webViewBuilder: (handlers) {
           harness.handlers = handlers;
+          // What the real CheckoutWebView does at the end of its initState.
+          handlers.onReloader?.call(() async => harness.reloads++);
           return const SizedBox.expand();
         },
       ),
@@ -125,25 +131,11 @@ void main() {
     );
   });
 
-  testWidgets('a load error after ready does not paint the panel',
+  testWidgets('retrying past ready reloads the current page, not the checkout',
       (tester) async {
-    // Android reports every failing subresource through onWebResourceError — a 404 favicon
-    // on the checkout page, or anything at all on the gateway's. Past `ready` the buyer is
-    // on a live page, and the panel's "Try again" reloads the ORIGINAL checkout URL, which
-    // would throw away a gateway session mid-payment.
-    final harness = await pumpScreen(tester);
-
-    harness.send(const ReadyMessage());
-    await tester.pump();
-
-    harness.handlers.onLoadError();
-    await tester.pump();
-
-    expect(find.byType(ErrorState), findsNothing);
-  });
-
-  testWidgets('a load error after the gateway does not paint the panel',
-      (tester) async {
+    // The buyer is at the gateway when its page fails. Remounting the WebView would
+    // reload the ORIGINAL checkout URL and discard the payment session they are in the
+    // middle of, so the retry has to reload where they actually are.
     final harness = await pumpScreen(tester);
 
     harness.send(const ReadyMessage());
@@ -152,9 +144,60 @@ void main() {
 
     harness.handlers.onLoadError();
     await tester.pump();
-
-    expect(find.byType(ErrorState), findsNothing);
+    expect(find.byType(ErrorState), findsOneWidget);
     expect(harness.session.settled, isFalse);
+
+    await tester.tap(find.text('Try again'));
+    await tester.pump();
+
+    expect(harness.reloads, 1);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+  });
+
+  testWidgets('a post-ready retry arms no deadline of its own', (tester) async {
+    // `suqo:alive` and `suqo:ready` belong to SUQO's own page. After the gateway leg the
+    // buyer is on someone else's, which will never send either — arming a deadline there
+    // would paint the panel again over a gateway that is loading perfectly well.
+    final harness = await pumpScreen(tester);
+
+    harness.send(const ReadyMessage());
+    harness.send(const GatewayMessage());
+    await tester.pump();
+    harness.handlers.onLoadError();
+    await tester.pump();
+
+    await tester.tap(find.text('Try again'));
+    await tester.pump();
+
+    await tester.pump(kAliveDeadline + kReadyDeadline);
+    expect(find.byType(ErrorState), findsNothing);
+  });
+
+  testWidgets('retrying cancels the previous attempt\'s ready timer',
+      (tester) async {
+    // alive at t=1 arms ready for t=26. A load error paints the panel, and the buyer
+    // retries at t=24. The first attempt's ready timer used to survive into the second
+    // and fire at t=26, painting "taking too long" two seconds into a fresh load.
+    final harness = await pumpScreen(tester);
+
+    harness.send(const AliveMessage());
+    await tester.pump(const Duration(seconds: 1));
+
+    harness.handlers.onLoadError();
+    await tester.pump();
+    expect(find.byType(ErrorState), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 23));
+    await tester.tap(find.text('Try again'));
+    await tester.pump();
+
+    // Past where the stranded timer from the first attempt would have fired.
+    await tester.pump(const Duration(seconds: 4));
+    expect(find.byType(ErrorState), findsNothing);
+    expect(
+      harness.events.where((e) => e.type == 'load_timeout'),
+      isEmpty,
+    );
   });
 
   testWidgets('suqo:alive disarms that deadline and arms the ready one',

@@ -61,7 +61,21 @@ String buildCheckoutUrl(
       ? checkoutPath.replaceFirst(':id', Uri.encodeComponent(id))
       : '${checkoutPath.replaceAll(RegExp(r'/+$'), '')}/${Uri.encodeComponent(id)}';
 
-  return origin + (path.startsWith('/') ? path : '/$path');
+  final url = origin + (path.startsWith('/') ? path : '/$path');
+
+  // The `^https?://` test above is a shape check, not a parse: `https://[bad/c/x`,
+  // `https://a b.com:xy/c/x` and `https://@@/c/x` all satisfy it and all make `Uri.parse`
+  // throw `FormatException`. That parse happens in the WebView's `initState`, where a
+  // throw means the screen never renders and the awaited `open` never completes — the
+  // host is left holding a future that cannot resolve. Failing here instead keeps the
+  // promise this function's doc makes: a bad configuration is a `SuqoConfigError` thrown
+  // before anything is shown.
+  if (Uri.tryParse(url) == null) {
+    throw SuqoConfigError(
+        'baseUrl does not form a valid URL — received "$baseUrl"');
+  }
+
+  return url;
 }
 
 /// What the WebView should do with a navigation it is about to start.

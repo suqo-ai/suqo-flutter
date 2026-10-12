@@ -13,12 +13,22 @@ class WebViewHandlers {
     required this.onHandoff,
     required this.onLoadEnd,
     required this.onLoadError,
+    this.onReloader,
   });
 
   final void Function(InboundMessage message) onMessage;
   final void Function(String url, String scheme) onHandoff;
   final VoidCallback onLoadEnd;
+
+  /// A main-frame load failure. Subresource failures do not reach this.
   final VoidCallback onLoadError;
+
+  /// Hands the screen a way to reload whatever the WebView is currently showing.
+  ///
+  /// Retrying by remounting the WebView reloads the *original* checkout URL, which is
+  /// right while still loading it and wrong once the buyer has moved on to a gateway —
+  /// that would throw away their payment session. This reloads where they actually are.
+  final void Function(Future<void> Function() reload)? onReloader;
 }
 
 /// The WebView the checkout page runs in.
@@ -50,6 +60,12 @@ class CheckoutWebView extends StatefulWidget {
 class _CheckoutWebViewState extends State<CheckoutWebView> {
   late final WebViewController _controller;
 
+  /// Whether the document currently loaded is SUQO's own.
+  ///
+  /// Starts true: the first thing loaded is the checkout URL, and `onPageStarted` has not
+  /// fired yet to say so.
+  bool _onCheckoutOrigin = true;
+
   @override
   void initState() {
     super.initState();
@@ -72,6 +88,16 @@ class _CheckoutWebViewState extends State<CheckoutWebView> {
           final parsed = parseInbound(message.message);
           // Not ours: the channel is shared with whatever the page chooses to post.
           if (parsed == null) return;
+          // The browser SDK's `event.origin` check, which a JavaScript channel has no
+          // equivalent of: the channel is installed into *every* document this WebView
+          // loads, so the gateway's page and the bank's can post a `suqo:result` the SDK
+          // would otherwise report to the merchant as a verified payment. Per
+          // protocol.md §8 a native host's result always comes from SUQO's own return
+          // page in this same window, so nothing legitimate is refused here.
+          if (!_onCheckoutOrigin) {
+            log('bridge.off_origin_dropped', {'type': parsed.runtimeType});
+            return;
+          }
           widget.handlers.onMessage(parsed);
         },
       )
@@ -81,6 +107,11 @@ class _CheckoutWebViewState extends State<CheckoutWebView> {
             return _decide(request.url);
           },
           onPageStarted: (String pageUrl) {
+            // Which origin the channel is currently speaking from. Re-evaluated on every
+            // navigation, so the gateway leg turns protocol messages off and SUQO's own
+            // return page — the one that posts `suqo:result` — turns them back on.
+            _onCheckoutOrigin = _isCheckoutOrigin(pageUrl);
+
             // The earliest hook available. Not equivalent to React Native's
             // `injectedJavaScriptBeforeContentLoaded` — it races the page's own scripts —
             // so a throw during the page's first evaluation can be missed. Debug-only.
@@ -90,7 +121,7 @@ class _CheckoutWebViewState extends State<CheckoutWebView> {
             // `XMLHttpRequest.prototype.open` — on a card-entry page that would ship the
             // buyer's request URLs to logcat, where `redactString` is no help because it
             // only knows the shapes SUQO's own URLs have.
-            if (widget.debugScript.isNotEmpty && _isCheckoutOrigin(pageUrl)) {
+            if (widget.debugScript.isNotEmpty && _onCheckoutOrigin) {
               _controller
                   .runJavaScript(widget.debugScript)
                   // Dropped futures become unhandled zone errors, which in a host running
@@ -150,7 +181,18 @@ class _CheckoutWebViewState extends State<CheckoutWebView> {
       // explicitly only because react-native-webview's default is true. Nothing to do here.
     }
 
-    controller.loadRequest(Uri.parse(widget.url));
+    // `buildCheckoutUrl` has already proved this parses, so `Uri.parse` cannot throw here
+    // — but the load itself can fail, and a dropped future is an unhandled zone error in
+    // a host running under `runZonedGuarded`. A failed load is `onWebResourceError`'s
+    // business, not a crash report.
+    controller.loadRequest(Uri.parse(widget.url)).catchError(
+          (Object error) =>
+              log('webview.load_failed', {'error': error.toString()}),
+        );
+
+    // The screen keeps this for a post-`ready` retry, where remounting the WebView would
+    // reload the original checkout URL and discard a gateway session.
+    widget.handlers.onReloader?.call(() => _controller.reload());
   }
 
   /// Whether [pageUrl] is served from the same origin as the checkout page.
