@@ -68,7 +68,10 @@ jobs:
             echo "Tag $TAG is already on the remote."
             exit 0
           fi
-          SHA=$(git log --first-parent -1 --format=%H -S"version: ${VERSION}" -- pubspec.yaml)
+          # -G with an anchored regex, not -S: -S is a substring count, so "version: 0.1.1" would
+          # also match inside "version: 0.1.10" and could pick the wrong commit.
+          VERSION_RE=$(printf '%s' "$VERSION" | sed 's/[.]/\\./g')
+          SHA=$(git log --first-parent -1 --format=%H -G"^version: ${VERSION_RE}[[:space:]]*$" -- pubspec.yaml)
           if [ -z "$SHA" ]; then
             echo "::error::Couldn't find the commit on main that set pubspec.yaml to ${VERSION}"
             exit 1
@@ -139,20 +142,37 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/compute-release.mjs
       - name: Open or update the release PR
-        if: steps.release.outputs.released == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASED: ${{ steps.release.outputs.released }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
-          BRANCH="bump-release/v${VERSION}"
-
-          # A newer version supersedes any older release PR still open.
+          # Close every open release PR except this run's. A newer version supersedes an older one,
+          # and with nothing releasable (the commits behind it were reverted) none should stay open:
+          # merging it would publish notes for changes that are no longer in the code.
+          if [ "$RELEASED" = "true" ]; then
+            BRANCH="bump-release/v${VERSION}"
+            REASON="Superseded by a newer release-train cycle (${BRANCH})."
+          else
+            BRANCH=""
+            REASON="Nothing on main is releasable any more, so this release is withdrawn."
+          fi
           gh pr list --state open --json number,headRefName \
             --jq ".[] | select(.headRefName | startswith(\"bump-release/\")) | select(.headRefName != \"$BRANCH\") | .number" |
           while read -r stale; do
-            gh pr close "$stale" --delete-branch \
-              --comment "Superseded by a newer release-train cycle (${BRANCH})."
+            gh pr close "$stale" --delete-branch --comment "$REASON"
           done
+          if [ "$RELEASED" != "true" ]; then
+            exit 0
+          fi
+
+          # A run that started before this version's release PR merged can finish after it. Its
+          # version is then already tagged, and a second PR for it would add a duplicate changelog
+          # section for a released version.
+          if [ -n "$(git ls-remote --tags origin "refs/tags/v${VERSION}")" ]; then
+            echo "v${VERSION} is already tagged — this run is stale, not opening a release PR."
+            exit 0
+          fi
 
           # Leave an open PR alone when its release hasn't changed, so pushes to main that add
           # nothing releasable don't churn it (and re-run its CI).

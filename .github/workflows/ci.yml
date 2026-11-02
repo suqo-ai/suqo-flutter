@@ -9,9 +9,11 @@ on:
   push:
     branches: [main, 'epic/**']
 
+# When publish.yml calls this, github.workflow and event_name are the caller's. Cancelling there
+# could kill the gate of an in-flight release, so only PR runs cancel their predecessors.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:

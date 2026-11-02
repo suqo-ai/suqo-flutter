@@ -41,7 +41,7 @@ flutter analyze
 echo "pre-push: test"
 flutter test
 
-echo "pre-push: publish dry run"
-flutter pub publish --dry-run
+# No `flutter pub publish --dry-run` here, though CI runs it: it fails on any uncommitted change to
+# a tracked file, which would block pushing clean commits from a dirty working tree.
 
 echo "pre-push: all checks passed"

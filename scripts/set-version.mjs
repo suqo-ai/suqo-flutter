@@ -28,9 +28,10 @@ const replaceLine = (relativePath, pattern, replacement) => {
   console.log(`set-version: ${relativePath} = ${version}`)
 }
 
-replaceLine('pubspec.yaml', /^version: .*$/m, `version: ${version}`)
+// The lookaheads leave a CRLF checkout's \r in place, rather than failing to match or eating it.
+replaceLine('pubspec.yaml', /^version: [^\r\n]*?(?=\r?$)/m, `version: ${version}`)
 replaceLine(
   'lib/suqo_checkout.dart',
-  /^const String suqoCheckoutVersion = '[^']*';$/m,
+  /^const String suqoCheckoutVersion = '[^']*';(?=\r?$)/m,
   `const String suqoCheckoutVersion = '${version}';`
 )
