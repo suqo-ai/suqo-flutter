@@ -1,0 +1,155 @@
+name: Release
+
+# Release train, ported from suqo-react. main is PR-only, so nothing here pushes to main. On every
+# push to main:
+#
+#   1. tag-release: makes sure pubspec.yaml's version is tagged. The tag goes on the commit that set
+#      that version (the release PR's merge), not on HEAD, so a run that was cancelled or failed is
+#      caught up by the next push without tagging whatever HEAD is by then.
+#   2. prepare-release-pr: computes the next version from conventional commits with semantic-release
+#      in dry-run mode (scripts/compute-release.mjs; a real run would tag main before review),
+#      applies the bump and changelog, and opens a bump-release/vX.Y.Z PR into main. No-ops if
+#      nothing is releasable. Runs after (1) so a tag that just landed counts as the last release.
+#
+# Publishing is NOT here: the tag push starts publish.yml, which re-runs the gate on the tagged
+# commit, creates the GitHub Release and publishes to pub.dev. It has to be a separate, tag-triggered
+# workflow because pub.dev's automated publishing only accepts an OIDC token from a run started by
+# pushing a tag. suqo-react can tag and publish in one workflow; this repo can't.
+#
+# Auth: both jobs act as the release GitHub App (secrets RELEASE_APP_ID and RELEASE_APP_PRIVATE_KEY,
+# with Contents and Pull requests read/write on this repo), not GITHUB_TOKEN. GitHub never starts
+# workflows from a GITHUB_TOKEN push, so with it the tag wouldn't start publish.yml and the release
+# PR wouldn't start CI. With the app, both do; suqo-react's "nudge the release PR" step isn't needed.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # Pinned, not @latest: these run in a job holding a write token. Bump deliberately.
+  SEMANTIC_RELEASE_PACKAGES: >-
+    semantic-release@25.0.9
+    @semantic-release/commit-analyzer@13.0.1
+    @semantic-release/release-notes-generator@14.1.1
+    conventional-changelog-conventionalcommits@9.3.1
+
+jobs:
+  tag-release:
+    name: Tag release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: release-tag
+      cancel-in-progress: false
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Tag the commit that set pubspec.yaml's version
+        run: |
+          VERSION=$(sed -n 's/^version: *//p' pubspec.yaml | tr -d '\r')
+          TAG="v${VERSION}"
+          if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
+            echo "Tag $TAG is already on the remote."
+            exit 0
+          fi
+          SHA=$(git log --first-parent -1 --format=%H -S"version: ${VERSION}" -- pubspec.yaml)
+          if [ -z "$SHA" ]; then
+            echo "::error::Couldn't find the commit on main that set pubspec.yaml to ${VERSION}"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG" "$SHA"
+          if ! git push origin "refs/tags/$TAG"; then
+            if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
+              echo "Tag $TAG was pushed by a concurrent run."
+              exit 0
+            fi
+            echo "::error::Failed to push tag $TAG"
+            exit 1
+          fi
+          echo "::notice::Tagged $SHA as $TAG. publish.yml takes it from here."
+
+  prepare-release-pr:
+    name: Prepare release PR
+    needs: tag-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: release-pr
+      cancel-in-progress: true
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # No package.json here: semantic-release is a CI-only tool, installed for this job alone.
+      - run: npm install --no-save --no-package-lock $SEMANTIC_RELEASE_PACKAGES
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Compute next release (dry-run — no tag, no push)
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node scripts/compute-release.mjs
+      - name: Open or update the release PR
+        if: steps.release.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          BRANCH="bump-release/v${VERSION}"
+
+          # A newer version supersedes any older release PR still open.
+          gh pr list --state open --json number,headRefName \
+            --jq ".[] | select(.headRefName | startswith(\"bump-release/\")) | select(.headRefName != \"$BRANCH\") | .number" |
+          while read -r stale; do
+            gh pr close "$stale" --delete-branch \
+              --comment "Superseded by a newer release-train cycle (${BRANCH})."
+          done
+
+          # Leave an open PR alone when its release hasn't changed, so pushes to main that add
+          # nothing releasable don't churn it (and re-run its CI).
+          PR_NUMBER=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$PR_NUMBER" ] &&
+            git fetch -q origin "refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" &&
+            git show "origin/$BRANCH:CHANGELOG.md" | node scripts/release-notes.mjs --normalized "$VERSION" > .pr-notes.txt &&
+            node scripts/release-notes.mjs --normalized "$VERSION" < .next-notes.md > .new-notes.txt &&
+            cmp -s .pr-notes.txt .new-notes.txt; then
+            echo "Release PR #$PR_NUMBER already has v${VERSION} with the same notes — leaving it alone."
+            exit 0
+          fi
+
+          node scripts/set-version.mjs "$VERSION"
+          cp .next-notes.md .pr-body.md
+          node scripts/clean-changelogs.mjs "$VERSION"
+          git checkout -b "$BRANCH"
+          git add pubspec.yaml lib/suqo_checkout.dart CHANGELOG.md
+          if [ -f CHANGELOG_ARCHIVE.md ]; then git add CHANGELOG_ARCHIVE.md; fi
+          git commit -m "chore(release): ${VERSION}"
+          git push -u origin "$BRANCH" --force
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr edit "$PR_NUMBER" --title "chore(release): v${VERSION}" --body-file .pr-body.md
+          else
+            gh pr create --base main --head "$BRANCH" \
+              --title "chore(release): v${VERSION}" --body-file .pr-body.md
+          fi

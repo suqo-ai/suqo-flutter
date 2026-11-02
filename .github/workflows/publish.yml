@@ -1,0 +1,119 @@
+name: Publish
+
+# Started by the vX.Y.Z tag that release.yml pushes when a release PR merges. Re-runs the gate on
+# the tagged commit (a tag can point at any commit, not only one CI already passed), then:
+#   - github-release: creates the GitHub Release from that version's CHANGELOG.md section
+#   - pub-dev: publishes to pub.dev
+# Each checks what already exists and only does what's missing, so "Re-run failed jobs" is the fix
+# for a failed run. Don't delete the tag to retry.
+#
+# Auth: pub.dev automated publishing (OIDC). No token or secret. dart-lang/setup-dart exchanges this
+# job's GitHub OIDC token (id-token: write) for a short-lived pub.dev credential. pub.dev only
+# accepts it from a run started by pushing a tag that matches the pattern set on the package's
+# Admin tab (`v{{version}}`), in the `pub.dev` environment that the Admin tab requires.
+#
+# pub.dev has no staging like npm's: a published version is live at once, and can only be retracted
+# (within 7 days), never deleted. The human gate is the `pub.dev` GitHub environment's required
+# reviewers. The pub-dev job waits for one of them to approve it under this run's summary page.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify the tag matches pubspec.yaml
+        id: version
+        run: |
+          VERSION=$(sed -n 's/^version: *//p' pubspec.yaml | tr -d '\r')
+          if [ "${GITHUB_REF_NAME#v}" != "$VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match pubspec.yaml version $VERSION"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter pub get
+        working-directory: example
+      - run: dart format --output=none --set-exit-if-changed .
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter pub publish --dry-run
+
+  github-release:
+    name: GitHub Release
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the GitHub Release if it's missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "GitHub Release $GITHUB_REF_NAME already exists."
+            exit 0
+          fi
+          node scripts/release-notes.mjs "$VERSION" < CHANGELOG.md > .release-notes.md
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes-file .release-notes.md
+
+  pub-dev:
+    name: Publish to pub.dev
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: pub.dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check whether pub.dev already has this version
+        id: check
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+            "https://pub.dev/api/packages/suqo_checkout/versions/${VERSION}")
+          case "$STATUS" in
+            200)
+              echo "::notice::suqo_checkout ${VERSION} is already on pub.dev — skipping the publish."
+              echo "publish=false" >> "$GITHUB_OUTPUT" ;;
+            404)
+              echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::error::Couldn't check pub.dev for suqo_checkout ${VERSION} (HTTP ${STATUS})"
+              exit 1 ;;
+          esac
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.publish == 'true'
+      # Before flutter-action: setup-dart is what fetches the OIDC token and registers it with pub,
+      # and `flutter pub publish` picks it up from the shared pub config.
+      - uses: dart-lang/setup-dart@v1
+        if: steps.check.outputs.publish == 'true'
+      - uses: subosito/flutter-action@v2
+        if: steps.check.outputs.publish == 'true'
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+        if: steps.check.outputs.publish == 'true'
+      - name: Publish
+        if: steps.check.outputs.publish == 'true'
+        run: flutter pub publish --force

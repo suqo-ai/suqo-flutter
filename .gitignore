@@ -9,3 +9,7 @@ example/build/
 example/.flutter-plugins
 example/.flutter-plugins-dependencies
 example/pubspec.lock
+
+# Release tooling (installed with npm install --no-save in CI only)
+node_modules/
+.next-notes.md
