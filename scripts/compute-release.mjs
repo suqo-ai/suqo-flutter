@@ -4,6 +4,10 @@
 // reviewed. Ported from suqo-react, which ported it from the suqo repo.
 import semanticRelease from 'semantic-release'
 import { appendFileSync, writeFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+// The repo root, as clean-changelogs.mjs resolves it, so the two agree wherever this is run from.
+const NOTES_PATH = fileURLToPath(new URL('../.next-notes.md', import.meta.url))
 
 const output = (line) => {
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${line}\n`)
@@ -19,6 +23,6 @@ if (!result) {
 
 const { version, notes } = result.nextRelease
 console.log(`Next release: ${version}`)
-writeFileSync('.next-notes.md', notes)
+writeFileSync(NOTES_PATH, notes)
 output('released=true')
 output(`version=${version}`)

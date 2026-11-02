@@ -6,8 +6,8 @@ conventional commits, land on `main` through a release PR, and are published to
 
 - `.github/workflows/release.yml` (every push to `main`): tags the merged release and keeps the
   release PR up to date.
-- `.github/workflows/publish.yml` (every `vX.Y.Z` tag): re-runs the checks, creates the GitHub
-  Release and publishes to pub.dev.
+- `.github/workflows/publish.yml` (every `vX.Y.Z` tag): re-runs the checks, publishes to pub.dev,
+  then creates the GitHub Release.
 
 Their header comments have the details.
 
@@ -35,8 +35,9 @@ with the [Conventional Commits](https://www.conventionalcommits.org/) preset (`.
    `feat:`/`fix:`), so your nudge isn't wiped by an unrelated merge. When it does change, nudge
    again.
 4. The merge tags `vX.Y.Z` on the merge commit and starts the Publish workflow on that tag. Once
-   its checks pass, the "Publish to pub.dev" job waits for approval: open the run, click **Review deployments**, tick `pub.dev` and approve. The version
-   is live on pub.dev as soon as that job finishes. There's no staging step after it.
+   its checks pass, the "Publish to pub.dev" job waits for approval: open the run, click
+   **Review deployments**, tick `pub.dev` and approve. The version is live on pub.dev as soon as
+   that job finishes, and the GitHub Release follows. There's no staging step after it.
 
 ## If a publish fails
 
@@ -78,9 +79,15 @@ the major that matches the plugins' conventional-changelog libraries (9.x for th
 
 ## One-time setup
 
-No GitHub App or secrets are needed: everything runs on `GITHUB_TOKEN`. If the repo has a ruleset
-that restricts creating `v*` tags, add **GitHub Actions** to its bypass list, since `release.yml`
-pushes them.
+No GitHub App or secrets are needed: everything runs on `GITHUB_TOKEN`. It relies on two repo
+settings (both need repo admin):
+
+- **Settings → Actions → General → Workflow permissions:** tick **Allow GitHub Actions to create and
+  approve pull requests**. It's off by default, and without it `release.yml` can't open the release
+  PR. If it's greyed out, the org has it disabled: an org owner turns it on under the org's
+  Settings → Actions → General first.
+- If the repo has a ruleset that restricts creating `v*` tags, add **GitHub Actions** to its bypass
+  list, since `release.yml` pushes them.
 
 ### 1. `pub.dev` environment
 

@@ -147,6 +147,22 @@ jobs:
           RELEASED: ${{ steps.release.outputs.released }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
+          # Act only on the latest main. When main has moved on since this checkout, semantic-release
+          # reports "no release" (its branch-behind-remote check), which must not be read as "nothing
+          # releasable" and close the open release PR. The run for the newer push takes over.
+          if [ "$(git rev-parse HEAD)" != "$(git ls-remote origin refs/heads/main | cut -f1)" ]; then
+            echo "::notice::main has moved on since this run started — leaving the release PR to the newer run."
+            exit 0
+          fi
+
+          # A run that started before this version's release PR merged can finish after it. Its
+          # version is then already tagged: checked before closing anything, since such a run's
+          # idea of which release PR is current is out of date too.
+          if [ "$RELEASED" = "true" ] && [ -n "$(git ls-remote --tags origin "refs/tags/v${VERSION}")" ]; then
+            echo "v${VERSION} is already tagged — this run is stale, not touching release PRs."
+            exit 0
+          fi
+
           # Close every open release PR except this run's. A newer version supersedes an older one,
           # and with nothing releasable (the commits behind it were reverted) none should stay open:
           # merging it would publish notes for changes that are no longer in the code.
@@ -163,14 +179,6 @@ jobs:
             gh pr close "$stale" --delete-branch --comment "$REASON"
           done
           if [ "$RELEASED" != "true" ]; then
-            exit 0
-          fi
-
-          # A run that started before this version's release PR merged can finish after it. Its
-          # version is then already tagged, and a second PR for it would add a duplicate changelog
-          # section for a released version.
-          if [ -n "$(git ls-remote --tags origin "refs/tags/v${VERSION}")" ]; then
-            echo "v${VERSION} is already tagged — this run is stale, not opening a release PR."
             exit 0
           fi
 

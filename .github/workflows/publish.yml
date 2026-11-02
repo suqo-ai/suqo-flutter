@@ -27,6 +27,14 @@ on:
 permissions:
   contents: read
 
+# One run per tag at a time (the dispatched one and a hand-started one, say). Queued, not cancelled:
+# otherwise both could find the version missing, both wait for approval, and the second publish
+# would fail on a version the first just published. Not named "publish-…": ci.yml, called below,
+# uses "<caller workflow name>-<ref>" (here "Publish-<ref>"), and sharing a group would deadlock.
+concurrency:
+  group: pub-dev-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   check:
     name: Check tag and changelog
@@ -59,7 +67,9 @@ jobs:
         run: node scripts/release-notes.mjs "$VERSION" < CHANGELOG.md > /dev/null
 
   verify:
-    # The same gate as every PR, called rather than copied so the two can't drift.
+    # The same gate as every PR, called rather than copied so the two can't drift. After check, so a
+    # wrong tag or missing changelog section fails in seconds, not after the full gate.
+    needs: check
     uses: ./.github/workflows/ci.yml
 
   pub-dev-check:

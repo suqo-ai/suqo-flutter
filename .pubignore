@@ -16,6 +16,6 @@ node_modules/
 
 # Repo tooling, not part of the package. A .pubignore replaces .gitignore for pub, so the
 # entries above are repeated from it.
-scripts/
-hooks/
-RELEASING.md
+/scripts/
+/hooks/
+/RELEASING.md
