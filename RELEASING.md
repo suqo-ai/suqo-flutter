@@ -93,8 +93,9 @@ pub.dev only lets you turn on automated publishing for a package that already ex
 version is published from your own account. Do it from `main` **before** merging the PR that adds
 these workflows, so the tag lands on the commit that was actually published.
 
-1. With `main` checked out and `pubspec.yaml` at `0.1.0`, run `flutter pub publish --dry-run`. It
-   must report no warnings.
+1. With `main` checked out and `pubspec.yaml` at `0.1.0`, run `flutter pub publish --dry-run`. The
+   only warning should be pub's layout check asking to rename `docs/` to `doc/`: that rename lands
+   in the workflows PR, after this publish. Any other warning, fix it first.
 2. `flutter pub publish`. The first time, it opens a browser to sign in with the Google account
    that will own the package.
 3. Tag what you just published and push the tag:
@@ -123,5 +124,8 @@ Leave publishing from `workflow_dispatch` events off: only tag pushes should pub
 
 ### 6. Merge the workflows
 
-Merge the PR that adds these workflows. The Release run sees `v0.1.0` already on the remote and
-does nothing. From then on, the first `feat:` or `fix:` that lands opens the next release PR.
+**Squash-merge** the PR that adds these workflows, keeping its `ci:` title. It contains a `fix:`
+commit (the `docs/` → `doc/` rename), and a merge commit or rebase would put that on `main` as a
+releasable change, opening a 0.1.1 release PR for tooling alone. Squashed, the Release run sees
+`v0.1.0` already on the remote and nothing releasable since. From then on, the first `feat:` or
+`fix:` that lands opens the next release PR.

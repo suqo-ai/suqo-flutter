@@ -1,8 +1,10 @@
 name: CI
 
 # The gate every PR and every push to main goes through. hooks/pre-push runs the same checks
-# locally; this is the one that's enforced. publish.yml runs them again on the tagged commit.
+# locally; this is the one that's enforced. publish.yml calls this workflow (workflow_call) to run
+# the same gate on the tagged commit.
 on:
+  workflow_call:
   pull_request:
   push:
     branches: [main, 'epic/**']

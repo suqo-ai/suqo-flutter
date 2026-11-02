@@ -26,6 +26,12 @@ fi
 
 set -e
 
+# example/ is its own package. Without its packages fetched, analyze reports its imports as
+# unresolved even though CI (which fetches both) passes.
+echo "pre-push: pub get"
+flutter pub get
+(cd example && flutter pub get)
+
 echo "pre-push: format"
 dart format --output=none --set-exit-if-changed .
 
@@ -34,5 +40,8 @@ flutter analyze
 
 echo "pre-push: test"
 flutter test
+
+echo "pre-push: publish dry run"
+flutter pub publish --dry-run
 
 echo "pre-push: all checks passed"

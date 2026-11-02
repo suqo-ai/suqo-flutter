@@ -1,9 +1,10 @@
 name: Publish
 
-# Started by the vX.Y.Z tag that release.yml pushes when a release PR merges. Re-runs the gate on
-# the tagged commit (a tag can point at any commit, not only one CI already passed), then:
-#   - github-release: creates the GitHub Release from that version's CHANGELOG.md section
+# Started by the vX.Y.Z tag that release.yml pushes when a release PR merges. Checks the tag and
+# changelog, re-runs the CI gate on the tagged commit (a tag can point at any commit, not only one
+# CI already passed), then:
 #   - pub-dev: publishes to pub.dev
+#   - github-release: then creates the GitHub Release from that version's CHANGELOG.md section
 # Each checks what already exists and only does what's missing, so "Re-run failed jobs" is the fix
 # for a failed run. Don't delete the tag to retry.
 #
@@ -24,9 +25,10 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  check:
+    name: Check tag and changelog
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -40,21 +42,23 @@ jobs:
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-      - run: flutter pub get
-      - run: flutter pub get
-        working-directory: example
-      - run: dart format --output=none --set-exit-if-changed .
-      - run: flutter analyze
-      - run: flutter test
-      - run: flutter pub publish --dry-run
+      - name: Verify CHANGELOG.md has a section for it
+        # Checked here, before anything ships, rather than only when github-release builds the
+        # notes: a pub.dev version can't be unpublished, so a missing section must stop it first.
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: node scripts/release-notes.mjs "$VERSION" < CHANGELOG.md > /dev/null
+
+  verify:
+    # The same gate as every PR, called rather than copied so the two can't drift.
+    uses: ./.github/workflows/ci.yml
 
   github-release:
     name: GitHub Release
-    needs: verify
+    # After pub-dev, so there's never a GitHub Release for a version that isn't installable (a
+    # rejected approval, a failed publish). pub-dev succeeds without publishing when pub.dev
+    # already has the version, so a re-run still creates a missing Release.
+    needs: [check, pub-dev]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -64,7 +68,7 @@ jobs:
       - name: Create the GitHub Release if it's missing
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.verify.outputs.version }}
+          VERSION: ${{ needs.check.outputs.version }}
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "GitHub Release $GITHUB_REF_NAME already exists."
@@ -76,7 +80,7 @@ jobs:
 
   pub-dev:
     name: Publish to pub.dev
-    needs: verify
+    needs: [check, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: pub.dev
@@ -87,7 +91,7 @@ jobs:
       - name: Check whether pub.dev already has this version
         id: check
         env:
-          VERSION: ${{ needs.verify.outputs.version }}
+          VERSION: ${{ needs.check.outputs.version }}
         run: |
           STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
             "https://pub.dev/api/packages/suqo_checkout/versions/${VERSION}")
