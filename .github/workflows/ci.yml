@@ -45,6 +45,11 @@ jobs:
           flutter-version: '3.3.0'
           channel: stable
           cache: true
+      - name: Drop the example app
+        # example/ targets current Flutter (its pubspec needs a far newer Dart than 3.3.0 ships),
+        # and on 3.3.0 `flutter pub get` resolves it along with the package. It isn't published
+        # and isn't what the floor is about, so leave it out of this job.
+        run: rm -rf example
       - run: flutter pub get
       - name: Test
         run: flutter test

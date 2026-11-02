@@ -3,7 +3,7 @@
 Collect a SUQO payment on a full-screen checkout screen, from Flutter. No gateway
 integration, no payment UI to build.
 
-[docs/usage.md](./docs/usage.md) covers the same ground as this README with more detail —
+[doc/usage.md](./doc/usage.md) covers the same ground as this README with more detail —
 every `onEvent` shape, the full options table, and troubleshooting. The wire protocol this
 package implements against the SUQO web app is `js-checkout/docs/protocol.md` in the
 `js-checkout` repo.
