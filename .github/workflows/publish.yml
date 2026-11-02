@@ -1,8 +1,9 @@
 name: Publish
 
-# Started by the vX.Y.Z tag that release.yml pushes when a release PR merges. Checks the tag and
-# changelog, re-runs the CI gate on the tagged commit (a tag can point at any commit, not only one
-# CI already passed), then:
+# Runs on a vX.Y.Z tag: started by release.yml (workflow_dispatch on the tag it just pushed, since
+# its GITHUB_TOKEN tag push can't start workflows itself), or by a person pushing a tag by hand.
+# Checks the tag and changelog, re-runs the CI gate on the tagged commit (a tag can point at any
+# commit, not only one CI already passed), then:
 #   - pub-dev: publishes to pub.dev
 #   - github-release: then creates the GitHub Release from that version's CHANGELOG.md section
 # Each checks what already exists and only does what's missing, so "Re-run failed jobs" is the fix
@@ -10,8 +11,9 @@ name: Publish
 #
 # Auth: pub.dev automated publishing (OIDC). No token or secret. dart-lang/setup-dart exchanges this
 # job's GitHub OIDC token (id-token: write) for a short-lived pub.dev credential. pub.dev only
-# accepts it from a run started by pushing a tag that matches the pattern set on the package's
-# Admin tab (`v{{version}}`), in the `pub.dev` environment that the Admin tab requires.
+# accepts it from a run on a tag that matches the pattern set on the package's Admin tab
+# (`v{{version}}`), in the `pub.dev` environment that the Admin tab requires, and from a
+# workflow_dispatch run only with "Enable publishing from workflow_dispatch events" ticked there.
 #
 # pub.dev has no staging like npm's: a published version is live at once, and can only be retracted
 # (within 7 days), never deleted. The human gate is the `pub.dev` GitHub environment's required
@@ -20,6 +22,7 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -36,6 +39,12 @@ jobs:
       - name: Verify the tag matches pubspec.yaml
         id: version
         run: |
+          # A manual dispatch can pick any branch; only a tag may publish (pub.dev refuses others
+          # anyway, but only at the very end).
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            echo "::error::Run this workflow on a vX.Y.Z tag, not the branch $GITHUB_REF_NAME"
+            exit 1
+          fi
           VERSION=$(sed -n 's/^version: *//p' pubspec.yaml | tr -d '\r')
           if [ "${GITHUB_REF_NAME#v}" != "$VERSION" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match pubspec.yaml version $VERSION"

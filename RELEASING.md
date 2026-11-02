@@ -28,17 +28,26 @@ with the [Conventional Commits](https://www.conventionalcommits.org/) preset (`.
 1. Merge PRs into `main` as usual.
 2. The Release workflow opens (or updates) a `bump-release/vX.Y.Z` PR that bumps the version in
    `pubspec.yaml` and `suqoCheckoutVersion` in `lib/suqo_checkout.dart`, and adds the new
-   `CHANGELOG.md` section. It's opened by the release GitHub App, so CI runs on it like any PR.
-3. Merge it once it's green. The merge tags `vX.Y.Z` on the merge commit.
-4. The tag starts the Publish workflow. Once its checks pass, the "Publish to pub.dev" job waits
-   for approval: open the run, click **Review deployments**, tick `pub.dev` and approve. The version
+   `CHANGELOG.md` section.
+3. That PR doesn't start CI by itself, because it was opened with `GITHUB_TOKEN`. Push an empty
+   commit to it, or close and reopen it, then merge once it's green. Later merges to `main` leave
+   the PR's branch alone unless the release itself changes (its version, or its notes after a new
+   `feat:`/`fix:`), so your nudge isn't wiped by an unrelated merge. When it does change, nudge
+   again.
+4. The merge tags `vX.Y.Z` on the merge commit and starts the Publish workflow on that tag. Once
+   its checks pass, the "Publish to pub.dev" job waits for approval: open the run, click **Review deployments**, tick `pub.dev` and approve. The version
    is live on pub.dev as soon as that job finishes. There's no staging step after it.
 
 ## If a publish fails
 
 Use **"Re-run failed jobs"** on the Publish run for that tag. Each job checks what already exists
 (the GitHub Release, the version on pub.dev) and only does what's missing. Don't delete the tag to
-retry: pub.dev only accepts a run started by the tag push itself.
+retry.
+
+If there's no Publish run for the tag (the Release run's "Start publish" job failed), re-run that
+Release run's failed jobs. Only the run that created the tag starts a publish, so pushing more
+commits to `main` won't. Or start it by hand: Actions → Publish → **Run workflow**, and pick the
+`vX.Y.Z` tag (not a branch) under "Use workflow from".
 
 If the tag itself is missing (the Release run failed before tagging), re-run that Release run, or
 merge anything into `main`. The next run tags the commit that set the version, not `HEAD`.
@@ -69,25 +78,17 @@ the major that matches the plugins' conventional-changelog libraries (9.x for th
 
 ## One-time setup
 
-### 1. GitHub App for tags and release PRs
+No GitHub App or secrets are needed: everything runs on `GITHUB_TOKEN`. If the repo has a ruleset
+that restricts creating `v*` tags, add **GitHub Actions** to its bypass list, since `release.yml`
+pushes them.
 
-GitHub never starts a workflow from a push made with `GITHUB_TOKEN`, so the tag `release.yml`
-pushes wouldn't start `publish.yml`. The release jobs act as a GitHub App instead.
-
-1. Create (or reuse) an org GitHub App with repository permissions **Contents: Read and write** and
-   **Pull requests: Read and write**, and install it on `suqo-ai/suqo-flutter`.
-2. Add repository secrets `RELEASE_APP_ID` (the app's ID) and `RELEASE_APP_PRIVATE_KEY` (a private
-   key generated on the app's settings page).
-3. If `main` or tags have rulesets, let the app bypass the tag rule (it pushes `v*` tags) but not
-   the pull-request rule.
-
-### 2. `pub.dev` environment
+### 1. `pub.dev` environment
 
 In Settings → Environments, create an environment named exactly `pub.dev`. Add required reviewers
 (the people who may approve a publish), and under deployment branches and tags, allow only tags
 matching `v*.*.*`.
 
-### 3. First publish: 0.1.0, by hand
+### 2. First publish: 0.1.0, by hand
 
 pub.dev only lets you turn on automated publishing for a package that already exists, so the first
 version is published from your own account. Do it from `main` **before** merging the PR that adds
@@ -102,7 +103,7 @@ these workflows, so the tag lands on the commit that was actually published.
    `git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0`. (That commit has no `publish.yml`, so
    nothing runs. Create the v0.1.0 GitHub Release by hand if you want one.)
 
-### 4. Verified publisher (recommended)
+### 3. Verified publisher (recommended)
 
 Move the package from a personal account to the `suqo.ai` publisher, so pub.dev shows it as
 published by SUQO, not by a person:
@@ -112,17 +113,19 @@ published by SUQO, not by a person:
 2. On the package's Admin tab, **Transfer to publisher** → `suqo.ai`. Add the other maintainers as
    publisher members.
 
-### 5. Turn on automated publishing
+### 4. Turn on automated publishing
 
 On https://pub.dev/packages/suqo_checkout/admin, under **Automated publishing**:
 
 - **Enable publishing from GitHub Actions**, repository `suqo-ai/suqo-flutter`.
 - **Tag pattern:** `v{{version}}`.
 - **Require GitHub Actions environment:** `pub.dev`.
+- **Enable publishing from `workflow_dispatch` events:** on. `release.yml` pushes the tag with
+  `GITHUB_TOKEN`, which can't start `publish.yml` by itself, so it dispatches `publish.yml` on the
+  tag instead. pub.dev still checks that the run's ref is a tag matching the pattern, so a dispatch
+  on a branch can't publish. Leave publishing from `push` events on too, for a tag pushed by hand.
 
-Leave publishing from `workflow_dispatch` events off: only tag pushes should publish.
-
-### 6. Merge the workflows
+### 5. Merge the workflows
 
 **Squash-merge** the PR that adds these workflows, keeping its `ci:` title. It contains a `fix:`
 commit (the `docs/` → `doc/` rename), and a merge commit or rebase would put that on `main` as a

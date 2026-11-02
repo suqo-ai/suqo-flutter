@@ -6,20 +6,27 @@ name: Release
 #   1. tag-release: makes sure pubspec.yaml's version is tagged. The tag goes on the commit that set
 #      that version (the release PR's merge), not on HEAD, so a run that was cancelled or failed is
 #      caught up by the next push without tagging whatever HEAD is by then.
-#   2. prepare-release-pr: computes the next version from conventional commits with semantic-release
+#   2. start-publish: when this run created the tag, starts publish.yml on it (see "Publishing").
+#   3. prepare-release-pr: computes the next version from conventional commits with semantic-release
 #      in dry-run mode (scripts/compute-release.mjs; a real run would tag main before review),
 #      applies the bump and changelog, and opens a bump-release/vX.Y.Z PR into main. No-ops if
 #      nothing is releasable. Runs after (1) so a tag that just landed counts as the last release.
 #
-# Publishing is NOT here: the tag push starts publish.yml, which re-runs the gate on the tagged
-# commit, creates the GitHub Release and publishes to pub.dev. It has to be a separate, tag-triggered
-# workflow because pub.dev's automated publishing only accepts an OIDC token from a run started by
-# pushing a tag. suqo-react can tag and publish in one workflow; this repo can't.
+# Publishing: publish.yml re-runs the gate on the tagged commit, publishes to pub.dev and creates the
+# GitHub Release. It's a separate workflow, started on the tag, because pub.dev's automated
+# publishing only accepts an OIDC token from a run whose ref is a tag. Everything here uses
+# GITHUB_TOKEN, and GitHub never starts workflows from a GITHUB_TOKEN push, so the tag push alone
+# doesn't start publish.yml. start-publish dispatches it instead (`gh workflow run --ref <tag>`):
+# GITHUB_TOKEN may start workflow_dispatch runs, and pub.dev accepts them once "Enable publishing
+# from workflow_dispatch events" is ticked on the package's Admin tab (RELEASING.md).
 #
-# Auth: both jobs act as the release GitHub App (secrets RELEASE_APP_ID and RELEASE_APP_PRIVATE_KEY,
-# with Contents and Pull requests read/write on this repo), not GITHUB_TOKEN. GitHub never starts
-# workflows from a GITHUB_TOKEN push, so with it the tag wouldn't start publish.yml and the release
-# PR wouldn't start CI. With the app, both do; suqo-react's "nudge the release PR" step isn't needed.
+# Re-runs: only the run that created the tag starts publish.yml (its run id is in the tag message),
+# so a later push to main never starts a second publish while the first waits for approval. If
+# start-publish fails, re-run that run's failed jobs.
+#
+# Known limitation, as in suqo-react: the release PR is opened with GITHUB_TOKEN, so it doesn't start
+# CI. Nudge it (push an empty commit, or close and reopen the PR) before merging. Later pushes to
+# main leave the PR branch alone unless the release itself changed, so a nudge isn't wiped.
 on:
   push:
     branches: [main]
@@ -40,23 +47,23 @@ jobs:
     name: Tag release
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
     concurrency:
       group: release-tag
       cancel-in-progress: false
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/create-github-app-token@v2
-        id: app-token
-        with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
       - name: Tag the commit that set pubspec.yaml's version
+        id: tag
         run: |
           VERSION=$(sed -n 's/^version: *//p' pubspec.yaml | tr -d '\r')
           TAG="v${VERSION}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
             echo "Tag $TAG is already on the remote."
             exit 0
@@ -68,7 +75,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "$TAG" "$SHA"
+          git tag -a "$TAG" -m "$TAG (release run ${GITHUB_RUN_ID})" "$SHA"
           if ! git push origin "refs/tags/$TAG"; then
             if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
               echo "Tag $TAG was pushed by a concurrent run."
@@ -77,26 +84,46 @@ jobs:
             echo "::error::Failed to push tag $TAG"
             exit 1
           fi
-          echo "::notice::Tagged $SHA as $TAG. publish.yml takes it from here."
+          echo "::notice::Tagged $SHA as $TAG."
+
+  start-publish:
+    name: Start publish
+    needs: tag-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start publish.yml on the tag this run created
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.tag-release.outputs.tag }}
+        run: |
+          git fetch -q origin "refs/tags/$TAG:refs/tags/$TAG"
+          if ! git for-each-ref --format='%(contents)' "refs/tags/$TAG" | grep -qF "(release run ${GITHUB_RUN_ID})"; then
+            echo "Tag $TAG was created by another run — not starting a publish from this one."
+            exit 0
+          fi
+          gh workflow run publish.yml --ref "$TAG"
+          echo "::notice::Started publish.yml on $TAG. Approve its pub.dev deployment to publish."
 
   prepare-release-pr:
     name: Prepare release PR
     needs: tag-release
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
     concurrency:
       group: release-pr
       cancel-in-progress: true
     steps:
-      - uses: actions/create-github-app-token@v2
-        id: app-token
-        with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -109,12 +136,12 @@ jobs:
       - name: Compute next release (dry-run — no tag, no push)
         id: release
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/compute-release.mjs
       - name: Open or update the release PR
         if: steps.release.outputs.released == 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           BRANCH="bump-release/v${VERSION}"
