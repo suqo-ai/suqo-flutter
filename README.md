@@ -207,4 +207,4 @@ talks to `app.suqo.ai` over HTTPS and needs no exception.
 
 ## License
 
-Apache-2.0
+MIT
