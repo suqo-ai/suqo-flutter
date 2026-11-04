@@ -8,7 +8,7 @@ semantic-release from conventional commits and land through the release PR; see 
 
 ### Bug Fixes
 
-* added CI and the release pileline along with relicense from Apache-2.0 to MIT ([05c3f3c](https://github.com/suqo-ai/suqo-flutter/commit/05c3f3c76417514c04624170047728df99fefe83))
+* relicense from Apache-2.0 to MIT ([05c3f3c](https://github.com/suqo-ai/suqo-flutter/commit/05c3f3c76417514c04624170047728df99fefe83))
 
 ## [0.1.0]
 
