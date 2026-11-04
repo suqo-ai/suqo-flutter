@@ -1,0 +1,59 @@
+name: CI
+
+# The gate every PR and every push to main goes through. hooks/pre-push runs the same checks
+# locally; this is the one that's enforced. publish.yml calls this workflow (workflow_call) to run
+# the same gate on the tagged commit.
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches: [main, 'epic/**']
+
+# When publish.yml calls this, github.workflow and event_name are the caller's. Cancelling there
+# could kill the gate of an in-flight release, so only PR runs cancel their predecessors.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter pub get
+        working-directory: example
+      - name: Format
+        run: dart format --output=none --set-exit-if-changed .
+      - name: Analyze
+        run: flutter analyze
+      - name: Test
+        run: flutter test
+      - name: Publish dry run
+        # pub.dev's own validation (pubspec fields, archive size, CHANGELOG, LICENSE), so a release
+        # can't fail at the last step for something a PR could have caught.
+        run: flutter pub publish --dry-run
+
+  floor:
+    # pubspec.yaml declares Flutter >=3.3.0. Run the tests on exactly that, so the floor is checked
+    # rather than claimed. Format and analyze only run on stable: their rules differ by version.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.3.0'
+          channel: stable
+          cache: true
+      - name: Drop the example app
+        # example/ targets current Flutter (its pubspec needs a far newer Dart than 3.3.0 ships),
+        # and on 3.3.0 `flutter pub get` resolves it along with the package. It isn't published
+        # and isn't what the floor is about, so leave it out of this job.
+        run: rm -rf example
+      - run: flutter pub get
+      - name: Test
+        run: flutter test

@@ -1,0 +1,21 @@
+.dart_tool/
+.packages
+build/
+pubspec.lock
+.flutter-plugins
+.flutter-plugins-dependencies
+example/.dart_tool/
+example/build/
+example/.flutter-plugins
+example/.flutter-plugins-dependencies
+example/pubspec.lock
+
+# Release tooling (installed with npm install --no-save in CI only)
+node_modules/
+.next-notes.md
+
+# Repo tooling, not part of the package. A .pubignore replaces .gitignore for pub, so the
+# entries above are repeated from it.
+/scripts/
+/hooks/
+/RELEASING.md

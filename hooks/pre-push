@@ -1,0 +1,47 @@
+#!/bin/sh
+# Pre-push gate: the same checks CI runs, so a failure costs a re-push rather than a red PR.
+# Install once per clone with `git config core.hooksPath hooks` (RELEASING.md).
+
+# stdin is one line per ref being pushed: <local ref> <local sha> <remote ref> <remote sha>
+pushes_code=false
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # main is PR-only: the release train opens release PRs against it and tags what gets merged.
+  if [ "$remote_ref" = "refs/heads/main" ]; then
+    echo "pre-push: pushing to main is blocked. Use a branch and open a PR."
+    exit 1
+  fi
+  # Only a branch update sends code. A deletion has an all-zero local sha, and tags aren't gated.
+  case "$remote_ref" in
+    refs/heads/*)
+      case "$local_sha" in
+        *[!0]*) pushes_code=true ;;
+      esac
+      ;;
+  esac
+done
+
+if [ "$pushes_code" = false ]; then
+  exit 0
+fi
+
+set -e
+
+# example/ is its own package. Without its packages fetched, analyze reports its imports as
+# unresolved even though CI (which fetches both) passes.
+echo "pre-push: pub get"
+flutter pub get
+(cd example && flutter pub get)
+
+echo "pre-push: format"
+dart format --output=none --set-exit-if-changed .
+
+echo "pre-push: analyze"
+flutter analyze
+
+echo "pre-push: test"
+flutter test
+
+# No `flutter pub publish --dry-run` here, though CI runs it: it fails on any uncommitted change to
+# a tracked file, which would block pushing clean commits from a dirty working tree.
+
+echo "pre-push: all checks passed"
