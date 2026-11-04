@@ -1,6 +1,6 @@
 name: suqo_checkout
 description: Collect a SUQO payment on a full-screen checkout screen. No gateway integration, no payment UI to build.
-version: 0.1.0
+version: 0.1.1
 repository: https://github.com/suqo-ai/suqo-flutter
 issue_tracker: https://github.com/suqo-ai/suqo-flutter/issues
 

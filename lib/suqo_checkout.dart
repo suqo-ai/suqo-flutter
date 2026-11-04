@@ -32,4 +32,4 @@ export 'src/urls.dart'
 
 /// This package's version, as published. The release PR keeps it equal to pubspec.yaml
 /// (scripts/set-version.mjs), and test/version_test.dart checks it.
-const String suqoCheckoutVersion = '0.1.0';
+const String suqoCheckoutVersion = '0.1.1';
