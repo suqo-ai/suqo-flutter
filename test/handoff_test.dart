@@ -20,8 +20,20 @@ class _FakeLauncher extends UrlLauncherPlatform
   @override
   LinkDelegate? get linkDelegate => null;
 
+  // `launch`, not `launchUrl`: the legacy entry point exists in every version of the
+  // platform interface. The Flutter 3.3.0 floor resolves one with no `launchUrl` at all, and
+  // newer ones route their default `launchUrl` through this, so one override covers both.
   @override
-  Future<bool> launchUrl(String url, LaunchOptions options) async {
+  Future<bool> launch(
+    String url, {
+    required bool useSafariVC,
+    required bool useWebView,
+    required bool enableJavaScript,
+    required bool enableDomStorage,
+    required bool universalLinksOnly,
+    required Map<String, String> headers,
+    String? webOnlyWindowName,
+  }) async {
     if (error != null) throw error!;
     if (refuse.contains(url)) return false;
     opened.add(url);
