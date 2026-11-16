@@ -6,6 +6,11 @@ analyzer:
   language:
     strict-casts: true
     strict-raw-types: true
+  errors:
+    # Flutter 3.50 deprecates `package:flutter/material.dart` in favour of `material_ui`,
+    # which the declared Flutter 3.3.0 floor cannot use. CI analyzes on current stable, so
+    # without this every import of it fails the build. Revisit when the floor moves.
+    deprecated_member_use: ignore
 
 linter:
   rules:
