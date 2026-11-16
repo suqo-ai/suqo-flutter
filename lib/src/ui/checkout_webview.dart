@@ -214,6 +214,9 @@ class _CheckoutWebViewState extends State<CheckoutWebView> {
 
     switch (navigation.kind) {
       case NavigationKind.handoff:
+        // The first step of the handoff, logged here because a navigation the WebView never
+        // reports looks identical from further down: no lines at all.
+        log('nav.handoff', {'scheme': navigation.scheme});
         widget.handlers.onHandoff(url, navigation.scheme);
         return NavigationDecision.prevent;
       case NavigationKind.block:

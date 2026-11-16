@@ -152,6 +152,11 @@ block per scheme to your own `AndroidManifest.xml`:
 Without it the launch fails silently and you will see a `handoff_failed` event. See
 `example/android/app/src/main/AndroidManifest.xml`.
 
+Write each scheme with the exact case the bank app registers — `fonepayApp`, not
+`fonepayapp`. Android matches schemes case-sensitively, which is also why this package hands
+the deeplink to the OS as the gateway wrote it rather than through Dart's `Uri`, which would
+lowercase it.
+
 ## Requirements
 
 | | Minimum |

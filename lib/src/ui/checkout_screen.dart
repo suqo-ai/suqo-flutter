@@ -297,6 +297,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       onHandoff: (url, scheme) {
         _emit(SuqoEvent.handoff(widget.session.sessionId, scheme));
         openExternal(url).then((opened) {
+          log('handoff.result', {'scheme': scheme, 'opened': opened});
           if (opened) return;
           _emit(SuqoEvent.handoffFailed(widget.session.sessionId, scheme));
         }).catchError((Object error) {
