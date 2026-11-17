@@ -14,6 +14,10 @@ analyzer:
     - build/**
     - android/**
     - ios/**
+  errors:
+    # Same reason as the package's own analysis_options.yaml: Flutter 3.50 deprecates
+    # `package:flutter/material.dart`, and CI analyzes the example too.
+    deprecated_member_use: ignore
 
 linter:
   # The lint rules applied to this project can be customized in the

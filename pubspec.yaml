@@ -26,3 +26,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^2.0.0
+  # Test-only: a fake url_launcher platform, so the handoff tests run the real
+  # `launchUrlString` path and can assert the exact string the plugin receives.
+  plugin_platform_interface: ^2.1.0
+  url_launcher_platform_interface: ^2.1.0

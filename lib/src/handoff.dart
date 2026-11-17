@@ -1,11 +1,28 @@
 // Handing a navigation to the OS, for the bank and wallet apps a WebView cannot reach.
 
+import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:url_launcher/url_launcher_string.dart';
 
 import 'log.dart';
 import 'urls.dart';
 
+/// The scheme of a candidate, for the log lines that report what reached the launcher.
+final RegExp _schemeOf = RegExp(r'^([a-z][a-z0-9+.-]*):', caseSensitive: false);
+
 /// Opens [url] outside the WebView. Returns true when the OS accepted it.
+///
+/// An `intent:` URI cannot be launched as written, so it is rewritten first — see
+/// [intentTargets]. Everything else is attempted as given.
+///
+/// **The URL is launched as a string, never through [Uri].** Dart's [Uri] lowercases the
+/// scheme — `Uri.parse('fonepayApp://pay').toString()` is `fonepayapp://pay` — while Android
+/// IntentFilter matching is case-sensitive, so a bank app registering `fonepayApp`, as
+/// Fonepay's does, was unreachable through `launchUrl(Uri)` even though a browser opens the
+/// same link. [launchUrlString] hands the string to the platform untouched, and
+/// url_launcher_android builds its intent with `android.net.Uri.parse`, which keeps the case.
+/// The React Native SDK cannot do this inside its package — `Linking.openURL` normalizes on
+/// the native side — and takes a host `openUrl` instead; here no host code is needed.
 ///
 /// There is deliberately no `canLaunchUrl` probe first. On Android 11+ it answers false for
 /// any scheme the host app has not declared in its manifest `<queries>`, and a package
@@ -20,17 +37,40 @@ import 'urls.dart';
 /// Host apps still need the `<queries>` entries for the launch itself to resolve on Android
 /// 11+ — one `<intent>` block per scheme. That is documented in the README; it cannot be
 /// shipped from inside this package.
+///
+/// Every step is logged — `handoff.start`, `handoff.candidate`, `handoff.attempt`,
+/// `handoff.opened` / `handoff.failed`, `handoff.exhausted` — because a navigation that
+/// never arrives and one that is dropped looked identical before. The React Native SDK
+/// emits the same lines.
 Future<bool> openExternal(String url) async {
-  // An `intent:` URI cannot be launched as written, so it is rewritten first. See
-  // [intentTargets].
-  final candidates = isIntentUrl(url) ? intentTargets(url) : <String>[url];
+  final intent = isIntentUrl(url);
+  final candidates = intent ? intentTargets(url) : <String>[url];
+
+  log('handoff.start', {
+    'platform': defaultTargetPlatform.name,
+    'form': intent ? 'intent-url' : 'custom-scheme',
+    'candidates': candidates.length,
+  });
 
   if (candidates.isEmpty) {
-    log('handoff.failed', {'error': 'intent url named no target'});
+    log('handoff.failed', {
+      'step': 'rewrite',
+      'error': 'intent url named no target',
+    });
     return false;
   }
 
-  for (final candidate in candidates) {
+  for (var index = 0; index < candidates.length; index++) {
+    final candidate = candidates[index];
+    final scheme = _schemeOf.firstMatch(candidate)?.group(1) ?? '';
+    log('handoff.candidate', {
+      'index': index,
+      'scheme': scheme,
+      // True when the scheme only resolves if its case survives — the trap described
+      // above. Launched as a string it does; this flags where to look if it ever stops.
+      'mixedCaseScheme': scheme != scheme.toLowerCase(),
+    });
+
     // Back through the same classifier the WebView's navigation goes through. A rebuilt
     // candidate is attacker-influenced input: after a handoff the WebView is on the
     // gateway's and the bank's pages, not SUQO's, and one of those naming
@@ -39,29 +79,49 @@ Future<bool> openExternal(String url) async {
     // `browser_fallback_url` to http(s) for this same reason.
     final navigation = classifyNavigation(candidate);
     if (navigation.kind == NavigationKind.block) {
-      log('handoff.blocked', {'scheme': navigation.scheme});
+      log('handoff.blocked', {'step': 'classify', 'scheme': navigation.scheme});
       continue;
     }
 
-    final uri = Uri.tryParse(candidate);
-    if (uri == null) {
-      log('handoff.failed', {'error': 'unparseable url'});
+    // A validity check only. The parsed [Uri] is deliberately not what gets launched —
+    // it has already lowercased the scheme. See above.
+    if (Uri.tryParse(candidate) == null) {
+      log('handoff.failed', {
+        'step': 'parse',
+        'index': index,
+        'scheme': scheme,
+        'error': 'unparseable url',
+      });
       continue;
     }
 
     try {
       // `externalApplication` is the point of the whole function: the OS picker, not an
       // in-app browser tab, is what reaches a bank app.
-      final launched =
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
-      log('handoff.attempt', {'launched': launched, 'url': candidate});
-      if (launched) return true;
+      final launched = await launchUrlString(
+        candidate,
+        mode: LaunchMode.externalApplication,
+      );
+      log('handoff.attempt', {
+        'index': index,
+        'scheme': scheme,
+        'launched': launched,
+      });
+      if (launched) {
+        log('handoff.opened', {'index': index, 'scheme': scheme});
+        return true;
+      }
     } catch (error) {
-      log('handoff.failed', {'error': error.toString()});
+      log('handoff.failed', {
+        'step': 'open',
+        'index': index,
+        'scheme': scheme,
+        'error': error.toString(),
+      });
     }
   }
 
-  log('handoff.failed', {'error': 'no handler'});
+  log('handoff.exhausted', {'candidates': candidates.length});
   return false;
 }
 
@@ -87,8 +147,15 @@ Future<bool> openExternal(String url) async {
 /// iOS cannot resolve `intent:` under any circumstances, but it can resolve what this
 /// rebuilds: the deeplink launches there too when the bank app is installed and claims that
 /// scheme, and the fallback URL opens in the browser when it is not.
-List<String> intentTargets(String url) {
-  if (!isIntentUrl(url)) return const [];
+///
+/// Mirrors `intentTargets` in the React Native SDK (`src/handoff.ts`); the two are expected
+/// to accept the same inputs, so a change here belongs there too.
+List<String> intentTargets(String rawUrl) {
+  if (!isIntentUrl(rawUrl)) return const [];
+
+  // Trimmed once, up front: [isIntentUrl] tolerates leading space, and slicing a fixed
+  // `intent:` length off an untrimmed string would cut in the wrong place.
+  final url = rawUrl.trim();
 
   final hash = url.indexOf('#');
   if (hash < 0) return const [];
